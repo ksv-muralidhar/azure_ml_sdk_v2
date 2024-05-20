@@ -1,0 +1,135 @@
+
+trigger: none
+
+pool:
+  name: self-hosted-agent
+
+variables:
+- group: password_strength_prediction_secrets
+
+stages:
+- stage: build
+  displayName: 'Build Stage'
+  jobs:
+  - job: build
+    displayName: Build
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.10'
+      displayName: 'Use Python 3.10'
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+      displayName: 'Install dependencies'
+
+    - script: |
+        pip install flake8
+        flake8
+      displayName: Flake8
+      enabled: false
+      continueOnError: true
+
+    - script: |
+        pip install pytest coverage
+        python -m pytest
+        coverage run -m pytest --junitxml=test-unit.xml
+        coverage xml
+      displayName: 'pytest and code coverage'
+      continueOnError: false
+
+    - task: PublishCodeCoverageResults@1
+      inputs:
+        codeCoverageTool: 'cobertura'
+        summaryFileLocation: '$(Build.SourcesDirectory)/coverage.xml'
+        failIfCoverageEmpty: true
+      displayName: 'Publish code coverage results'
+
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: 'test-unit.xml'
+        testRunTitle: 'Python 3.9'
+
+
+- stage: create_azure_resources
+  displayName: 'Create Azure ML Resources'
+  jobs:
+  - job: create_resources
+    displayName: 'Create Resources'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/aml_scripts/1_create_workspace.py
+      displayName: 'Create Azure ML Workspace'
+      continueOnError: false
+
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/aml_scripts/2_create_datastore.py
+      displayName: 'Create Azure ML Datastore'
+      continueOnError: false
+
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/aml_scripts/3_create_dataset.py
+      displayName: 'Create Azure ML Dataset'
+      continueOnError: false
+
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/aml_scripts/4_create_environment.py
+      displayName: 'Create Azure ML Environment'
+      continueOnError: false
+
+
+- stage: model_training_register
+  displayName: 'Train & Register Model'
+  jobs:
+  - job: model_training
+    displayName: 'Model Training & Registering'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/initiate_model_training_using_amlcompute.py
+      displayName: 'Train & Register Model'
+      continueOnError: false
+
+
+- stage: model_deploy
+  displayName: 'Deploy Model'
+  jobs:
+  - job: model_deploy
+    displayName: 'Model Deployment'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'password_strength_prediction_federation'
+        scriptType: 'powershell'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          python $(Build.SourcesDirectory)/deploy_model.py
+      displayName: 'Deploy Model'
+      continueOnError: false
